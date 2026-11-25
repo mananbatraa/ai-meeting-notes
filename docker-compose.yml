@@ -1,0 +1,27 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AMN_EXTRACTOR: ${AMN_EXTRACTOR:-claude}
+      AMN_TRANSCRIBER: ${AMN_TRANSCRIBER:-whisper}
+      AMN_WHISPER_MODEL: ${AMN_WHISPER_MODEL:-base}
+      AMN_CLAUDE_EFFORT: ${AMN_CLAUDE_EFFORT:-medium}
+      AMN_CORS_ORIGINS: '["http://localhost:8080"]'
+    volumes:
+      - meeting-data:/data
+      - whisper-models:/models
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  meeting-data:
+  whisper-models:
