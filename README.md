@@ -156,8 +156,8 @@ All settings are environment variables (see [`backend/.env.example`](backend/.en
 
 | Suite | Count | What it covers |
 |---|---|---|
-| Backend `pytest` | 94 (+1 opt-in) | API end to end through the real queue and SQLite, pipeline failure paths, restart recovery, concurrency, Claude request shape and error mapping (mocked client), grounding rules, transcript parsing, Markdown export, config |
-| Real Whisper (CI) | 1 | `tiny.en` transcribes speech synthesised by `espeak-ng`; run with `AMN_RUN_WHISPER=1 uv run pytest -m whisper` |
+| Backend `pytest` | 94 (+2 opt-in) | API end to end through the real queue and SQLite, pipeline failure paths, restart recovery, concurrency, Claude request shape and error mapping (mocked client), grounding rules, transcript parsing, Markdown export, config |
+| Real Whisper (CI) | 2 | faster-whisper can decode audio with the pinned PyAV; `tiny.en` transcribes speech synthesised by `espeak-ng`. Run with `uv sync --extra whisper && AMN_RUN_WHISPER=1 uv run pytest -m whisper` |
 | Frontend `vitest` | 49 | API client, upload validation and submission, polling with fake timers, retry/delete, owner filter, transcript jump, routing |
 
 ```bash

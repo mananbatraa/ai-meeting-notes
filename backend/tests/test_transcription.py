@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 import types
+import wave
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -99,6 +100,20 @@ def test_build_transcriber_from_settings() -> None:
     t = build_transcriber(Settings(transcriber="whisper", whisper_model="tiny.en", whisper_beam_size=2))
     assert isinstance(t, FasterWhisperTranscriber)
     assert (t.model_size, t.beam_size) == ("tiny.en", 2)
+
+
+@pytest.mark.whisper
+def test_faster_whisper_can_decode_audio(tmp_path: Path) -> None:
+    """Catches faster-whisper / PyAV incompatibilities without downloading a model."""
+    audio = pytest.importorskip("faster_whisper.audio")
+    wav_path = tmp_path / "tone.wav"
+    with wave.open(str(wav_path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\x00\x10" * 16000)  # 1 s of a constant signal
+    samples = audio.decode_audio(str(wav_path))
+    assert samples.shape == (16000,)
 
 
 @pytest.mark.whisper

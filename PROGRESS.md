@@ -22,14 +22,17 @@ First build done: working backend, frontend, tests, Docker and CI.
 - README with Mermaid architecture and design decisions; screenshots in `docs/`.
 
 **Tests**
-- Backend: 94 passed, 1 skipped (real-Whisper test, runs in CI with espeak-ng).
-  ruff and mypy --strict clean.
+- Backend: 94 passed, 2 skipped locally (the Whisper tests, which run in the CI
+  `whisper-integration` job). ruff and mypy --strict clean.
+- The first CI run found a real bug: faster-whisper 1.2.1 breaks on PyAV 19
+  (`av.open(metadata_errors=...)` was removed). Fixed by pinning `av<19` in the
+  `whisper` extra, with a model-free regression test that decodes a WAV.
 - Frontend: 49 vitest tests passing; eslint and tsc clean; production build OK.
-- Not verified locally: Docker image build and the real Whisper model (the build
-  sandbox can't download packages/models); CI covers both.
+- Docker images build in CI. The real Whisper model can't be downloaded in the build
+  sandbox, so the end-to-end transcription test only runs in CI.
 
 ## Next steps
-1. Check the first CI run, especially `whisper-integration` and `docker`.
+1. Confirm `whisper-integration` is green after the PyAV pin.
 2. Speaker diarization (who said what) for raw audio; Whisper gives no speakers today,
    which weakens owner extraction for audio uploads.
 3. Long meetings: chunk transcripts above the limit and merge notes instead of failing.
