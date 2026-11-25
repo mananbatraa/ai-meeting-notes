@@ -48,6 +48,13 @@ def test_upload_audio_is_processed(client: TestClient, settings: Settings, extra
     assert list(settings.upload_dir.iterdir()) == []  # audio removed after success
 
 
+def test_timestamps_are_timezone_aware_after_reload(client: TestClient) -> None:
+    mid = upload(client).json()["id"]
+    wait_done(client)
+    for m in (client.get(f"/api/meetings/{mid}").json(), client.get("/api/meetings").json()["items"][0]):
+        assert m["created_at"].endswith("Z") or m["created_at"].endswith("+00:00")
+
+
 def test_meeting_date_defaults_to_today(client: TestClient) -> None:
     body = upload(client).json()
     assert body["meeting_date"] == dt.date.today().isoformat()

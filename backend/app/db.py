@@ -18,6 +18,11 @@ def _utcnow() -> dt.datetime:
     return dt.datetime.now(dt.UTC)
 
 
+def _aware(value: dt.datetime) -> dt.datetime:
+    """SQLite drops tzinfo on the way back; every timestamp we store is UTC."""
+    return value if value.tzinfo else value.replace(tzinfo=dt.UTC)
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -46,8 +51,8 @@ class Meeting(Base):
             status=JobStatus(self.status),
             title=self.title,
             meeting_date=self.meeting_date,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
+            created_at=_aware(self.created_at),
+            updated_at=_aware(self.updated_at),
             error=self.error,
         )
 

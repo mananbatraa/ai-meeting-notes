@@ -17,8 +17,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import anthropic
 
-from ..schemas import ActionItem, Decision, MeetingNotes, Transcript
+from ..schemas import ActionItem, Decision, MeetingNotes, Priority, Transcript
 from .transcript_parser import render_for_llm
+from .transcription import DEMO_TRANSCRIPT
 
 if TYPE_CHECKING:
     from ..config import Settings
@@ -193,14 +194,77 @@ def ground_notes(notes: MeetingNotes, transcript: Transcript, meeting_date: dt.d
     )
 
 
+def _next_weekday(start: dt.date, weekday: int) -> dt.date:
+    """The next given weekday on or after ``start`` (Monday is 0)."""
+    return start + dt.timedelta(days=(weekday - start.weekday()) % 7)
+
+
+def demo_notes(meeting_date: dt.date) -> MeetingNotes:
+    """What good notes for ``DEMO_TRANSCRIPT`` look like (used by the offline demo)."""
+    friday = _next_weekday(meeting_date, 4)
+    next_monday = meeting_date + dt.timedelta(days=7 - meeting_date.weekday())
+    return MeetingNotes(
+        title="Mobile launch weekly sync",
+        summary=(
+            "The team reviewed launch readiness for the mobile app. iOS has passed App Store review, "
+            "but Android is blocked on the payments SDK upgrade, which Sam will finish by Friday. "
+            "To leave a week for beta feedback, the public launch moves from the 3rd to the 10th; "
+            "Lee will tell marketing. Crash reporting alerts still need to be set up."
+        ),
+        key_points=[
+            "iOS build passed review; Android is blocked on the payments SDK upgrade.",
+            "Marketing planned to launch on the 3rd.",
+            "A week of beta feedback is wanted before launch.",
+        ],
+        decisions=[
+            Decision(
+                decision="Move the public launch from the 3rd to the 10th.",
+                context="Gives a week of beta feedback before going public.",
+                timestamp_s=40.0,
+            )
+        ],
+        action_items=[
+            ActionItem(
+                task="Finish the payments SDK upgrade for Android",
+                owner="Sam",
+                due_date=friday,
+                priority=Priority.high,
+                timestamp_s=15.0,
+            ),
+            ActionItem(
+                task="Tell marketing about the new launch date and update the launch brief",
+                owner="Lee",
+                due_date=meeting_date,
+                priority=Priority.medium,
+                timestamp_s=40.0,
+            ),
+            ActionItem(
+                task="Set up crash reporting alerts",
+                owner="Sam",
+                due_date=next_monday,
+                priority=Priority.medium,
+                timestamp_s=74.0,
+            ),
+        ],
+        open_questions=["Do we still need the press kit from the agency?"],
+        participants=["Priya", "Sam", "Lee"],
+    )
+
+
 class FakeExtractor:
-    """Deterministic, offline extractor for demos and tests. No API key needed."""
+    """Deterministic, offline extractor for demos and tests. No API key needed.
+
+    Returns hand-written notes for the built-in demo transcript, and a placeholder
+    summary for anything else.
+    """
 
     def __init__(self) -> None:
         self.calls = 0
 
     def extract(self, transcript: Transcript, *, meeting_date: dt.date) -> MeetingNotes:
         self.calls += 1
+        if transcript.segments == DEMO_TRANSCRIPT.segments:
+            return demo_notes(meeting_date)
         speakers = list(dict.fromkeys(s.speaker for s in transcript.segments if s.speaker))
         first = transcript.segments[0].text.strip()
         return MeetingNotes(

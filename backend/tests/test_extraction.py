@@ -191,8 +191,25 @@ class TestGrounding:
 
 def test_fake_extractor_is_offline_and_deterministic() -> None:
     fake = FakeExtractor()
-    a = fake.extract(DEMO_TRANSCRIPT, meeting_date=MEETING_DATE)
-    b = fake.extract(DEMO_TRANSCRIPT, meeting_date=MEETING_DATE)
+    a = fake.extract(short_transcript(), meeting_date=MEETING_DATE)
+    b = fake.extract(short_transcript(), meeting_date=MEETING_DATE)
     assert a == b
     assert fake.calls == 2
-    assert a.participants == ["Priya", "Sam", "Lee"]
+    assert a.participants == ["Ana", "Ben"]
+    assert "Offline demo" in a.summary
+
+
+def test_demo_notes_resolve_relative_dates_and_pass_grounding() -> None:
+    notes = FakeExtractor().extract(DEMO_TRANSCRIPT, meeting_date=MEETING_DATE)  # a Wednesday
+    sdk, brief, alerts = notes.action_items
+    assert (sdk.owner, sdk.due_date) == ("Sam", dt.date(2026, 11, 27))  # "by Friday"
+    assert (brief.owner, brief.due_date) == ("Lee", MEETING_DATE)  # "today"
+    assert alerts.due_date == dt.date(2026, 11, 30)  # "early next week" -> Monday
+    assert ground_notes(notes, DEMO_TRANSCRIPT, MEETING_DATE).warnings == []
+
+
+def test_demo_notes_on_a_friday_are_due_the_same_day() -> None:
+    friday = dt.date(2026, 11, 27)
+    notes = FakeExtractor().extract(DEMO_TRANSCRIPT, meeting_date=friday)
+    assert notes.action_items[0].due_date == friday
+    assert notes.action_items[2].due_date == dt.date(2026, 11, 30)
