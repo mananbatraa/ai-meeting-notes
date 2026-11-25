@@ -1,0 +1,55 @@
+[project]
+name = "ai-meeting-notes"
+version = "0.1.0"
+description = "Meeting audio to structured notes: faster-whisper transcription + Claude structured outputs"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=2.14.0",
+    "fastapi>=0.165.0",
+    "pydantic-settings>=2.16.3",
+    "python-multipart>=0.0.34",
+    "sqlalchemy>=2.1.9",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.optional-dependencies]
+whisper = [
+    "faster-whisper>=1.2.1",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "ruff>=0.17.6",
+]
+
+[project.scripts]
+ai-meeting-notes = "app.main:run"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = ["whisper: runs the real faster-whisper model (needs the 'whisper' extra and a model download)"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "N", "S", "PT", "RET", "ASYNC"]
+ignore = ["RUF001", "S104"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+packages = ["app", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["faster_whisper.*"]
+ignore_missing_imports = true
