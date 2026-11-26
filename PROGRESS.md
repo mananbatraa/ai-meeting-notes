@@ -27,15 +27,16 @@ First build done: working backend, frontend, tests, Docker and CI.
 - The first CI run found a real bug: faster-whisper 1.2.1 breaks on PyAV 19
   (`av.open(metadata_errors=...)` was removed). Fixed by pinning `av<19` in the
   `whisper` extra, with a model-free regression test that decodes a WAV.
+- CI is green on all four jobs (backend, frontend, whisper-integration with the real
+  `tiny.en` model, docker compose build).
 - Frontend: 49 vitest tests passing; eslint and tsc clean; production build OK.
 - Docker images build in CI. The real Whisper model can't be downloaded in the build
   sandbox, so the end-to-end transcription test only runs in CI.
 
 ## Next steps
-1. Confirm `whisper-integration` is green after the PyAV pin.
-2. Speaker diarization (who said what) for raw audio; Whisper gives no speakers today,
+1. Speaker diarization (who said what) for raw audio; Whisper gives no speakers today,
    which weakens owner extraction for audio uploads.
-3. Long meetings: chunk transcripts above the limit and merge notes instead of failing.
-4. Playwright end-to-end test of upload -> notes in demo mode.
-5. Edit/check off action items in the UI; export to GitHub Issues / Linear.
-6. An eval set of real transcripts with expected action items to measure extraction quality.
+2. Long meetings: chunk transcripts above the limit and merge notes instead of failing.
+3. Playwright end-to-end test of upload -> notes in demo mode.
+4. Edit/check off action items in the UI; export to GitHub Issues / Linear.
+5. An eval set of real transcripts with expected action items to measure extraction quality.
