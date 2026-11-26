@@ -33,10 +33,31 @@ First build done: working backend, frontend, tests, Docker and CI.
 - Docker images build in CI. The real Whisper model can't be downloaded in the build
   sandbox, so the end-to-end transcription test only runs in CI.
 
+## Status (2026-11-25, late afternoon run)
+
+**Done this run**
+- Long meetings: transcripts over `AMN_CHUNK_CHARS` (200k chars) are split into
+  segment-aligned, overlapping parts (`services/chunking.py`), extracted concurrently,
+  grounded per part, merged by a second Claude call (`MERGE_PROMPT`) and grounded again
+  against the full transcript. Hard cap raised to 2M chars (still refuses, never truncates).
+- Action item editing: stored notes are `StoredNotes` / `TrackedActionItem` (stable `id`,
+  `done`, `edited`), kept out of the schema sent to Claude. New endpoints
+  `POST /api/meetings/{id}/action-items`, `PATCH|DELETE .../action-items/{item_id}`.
+  Atomic read-modify-write under a lock (race test fails without it). Old rows without ids
+  get stable positional ids (`item-N`). Markdown export has a Done column.
+- UI: done checkboxes (optimistic, rolled back on error), inline edit sending only changed
+  fields, add/remove, hide-done filter and "N of M done". Screenshot `docs/notes.png` updated.
+- README: features, API examples, config table, design notes, map-reduce diagram, test counts.
+
+**Tests**
+- Backend: 130 passed, 2 skipped locally (Whisper tests run in CI). ruff, ruff format,
+  mypy --strict clean.
+- Frontend: 63 vitest tests passing; eslint and tsc clean; production build OK.
+
 ## Next steps
 1. Speaker diarization (who said what) for raw audio; Whisper gives no speakers today,
    which weakens owner extraction for audio uploads.
-2. Long meetings: chunk transcripts above the limit and merge notes instead of failing.
-3. Playwright end-to-end test of upload -> notes in demo mode.
-4. Edit/check off action items in the UI; export to GitHub Issues / Linear.
+2. Playwright end-to-end test of upload -> notes -> check off in demo mode (wire into CI).
+3. Export action items to GitHub Issues / Linear.
+4. Show chunk progress ("part 3 of 8") while a long meeting is extracting.
 5. An eval set of real transcripts with expected action items to measure extraction quality.

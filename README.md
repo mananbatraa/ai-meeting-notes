@@ -17,7 +17,10 @@ constrained to a JSON schema and parsed straight into a validated Pydantic model
 - Every decision and action item links back to the moment in the transcript it came from.
 - **Grounding check:** owners nobody mentioned, due dates before the meeting, and
   timestamps past the end of the recording are cleared instead of trusted.
-- Filter action items by owner; copy or download the notes as Markdown.
+- Check action items off, fix an owner or date the model got wrong, add ones it missed;
+  filter by owner or hide done items; copy or download the notes as Markdown.
+- Long meetings (workshops, offsites) are summarised in overlapping parts and merged,
+  instead of being truncated or refused.
 - Failed jobs keep their audio and transcript and can be retried; work in flight when the
   server stops is picked up again on restart.
 - Offline demo mode (no API key, no model download) for trying the UI.
@@ -53,7 +56,7 @@ stateDiagram-v2
 
 | Path | What it does |
 |---|---|
-| `backend/app/api/routes.py` | Upload (streamed to disk with a size cap), paste, list, detail, retry, delete, Markdown export |
+| `backend/app/api/routes.py` | Upload (streamed to disk with a size cap), paste, list, detail, retry, delete, Markdown export, action item editing |
 | `backend/app/services/transcription.py` | `Transcriber` protocol; faster-whisper implementation, loaded lazily and shared across threads |
 | `backend/app/services/transcript_parser.py` | WebVTT / SRT / `Speaker: text` parsing, and the `[m:ss] Speaker: text` rendering sent to Claude |
 | `backend/app/services/extraction.py` | Prompts, Claude call, map-reduce for long meetings, error mapping, grounding check, offline demo extractor |
@@ -100,6 +103,17 @@ curl -F file=@standup.m4a -F meeting_date=2026-11-25 localhost:8000/api/meetings
 # {"id":"55ca…","status":"queued",…}
 curl localhost:8000/api/meetings/55ca…            # poll until "completed"
 curl localhost:8000/api/meetings/55ca…/markdown   # notes as Markdown
+```
+
+Action items can be corrected after extraction:
+
+```bash
+curl -X PATCH -H 'content-type: application/json' -d '{"done": true}' \
+  localhost:8000/api/meetings/55ca…/action-items/3f9a…      # check off
+curl -X PATCH -H 'content-type: application/json' -d '{"owner": "Priya", "due_date": null}' \
+  localhost:8000/api/meetings/55ca…/action-items/3f9a…      # fix owner, clear date
+curl -X POST -H 'content-type: application/json' -d '{"task": "Book the retro"}' \
+  localhost:8000/api/meetings/55ca…/action-items            # add one the model missed
 ```
 
 Interactive docs at `http://localhost:8000/docs`.
@@ -168,6 +182,13 @@ flowchart LR
   `ThreadPoolExecutor` is enough at this scale and needs no broker. All state is in the
   database, not the queue: on startup anything left `queued`/`transcribing`/`extracting`
   is re-queued. Swapping in Celery/RQ later only touches `JobQueue`.
+- **People get the last word on action items.** The schema sent to Claude (`ActionItem`)
+  has no `id`/`done` fields, so the model can't fill them in; stored notes use a subclass
+  (`TrackedActionItem`) that adds a stable id, `done`, and an `edited` flag set when a
+  person changes extracted content (checking an item off doesn't count). Edits are an
+  atomic read-modify-write of the notes JSON under a lock, so concurrent clicks can't
+  lose updates (there's a test that fails without the lock). In the UI, checking off is
+  optimistic and rolls back if the server refuses.
 - **Uploads are streamed** to disk in 1 MB chunks with the size limit enforced while
   reading; filenames are reduced to their basename and stored under a random UUID.
 - **Everything external sits behind a protocol** (`Transcriber`, `NotesExtractor`), so
@@ -177,9 +198,9 @@ flowchart LR
 
 | Suite | Count | What it covers |
 |---|---|---|
-| Backend `pytest` | 94 (+2 opt-in) | API end to end through the real queue and SQLite, pipeline failure paths, restart recovery, concurrency, Claude request shape and error mapping (mocked client), grounding rules, transcript parsing, Markdown export, config |
+| Backend `pytest` | 130 (+2 opt-in) | API end to end through the real queue and SQLite, pipeline failure paths, restart recovery, concurrency, Claude request shape and error mapping (mocked client), long-meeting chunking and map-reduce (part grounding, merge order, failure of one part), action item editing (validation, 404/409, lost-update race), grounding rules, transcript parsing, Markdown export, config |
 | Real Whisper (CI) | 2 | faster-whisper can decode audio with the pinned PyAV; `tiny.en` transcribes speech synthesised by `espeak-ng`. Run with `uv sync --extra whisper && AMN_RUN_WHISPER=1 uv run pytest -m whisper` |
-| Frontend `vitest` | 49 | API client, upload validation and submission, polling with fake timers, retry/delete, owner filter, transcript jump, routing |
+| Frontend `vitest` | 63 | API client, upload validation and submission, polling with fake timers, retry/delete, owner filter, transcript jump, routing, action item check-off (optimistic + rollback), edit/add/remove |
 
 ```bash
 cd backend && uv run pytest && uv run ruff check . && uv run mypy
