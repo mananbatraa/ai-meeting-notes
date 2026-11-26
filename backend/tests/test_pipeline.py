@@ -4,7 +4,7 @@ import threading
 from pathlib import Path
 
 from app.db import MeetingRepository
-from app.schemas import JobStatus, Transcript
+from app.schemas import JobStatus, MeetingNotes, Transcript
 from app.services.extraction import ExtractionError
 from app.services.pipeline import JobQueue, MeetingProcessor
 from app.services.transcription import DEMO_TRANSCRIPT, FakeTranscriber, TranscriptionError
@@ -30,7 +30,13 @@ def test_processes_audio_end_to_end_and_deletes_audio(repo: MeetingRepository, t
     assert done is not None
     assert done.status is JobStatus.completed
     assert done.transcript == DEMO_TRANSCRIPT
-    assert done.notes == extractor.notes
+    assert done.notes is not None
+    assert (
+        MeetingNotes.model_validate(
+            done.notes.model_dump(exclude={"action_items": {"__all__": {"id", "done", "edited"}}})
+        )
+        == extractor.notes
+    )
     assert done.title == "Mobile launch weekly sync"
     assert extractor.calls[0][1] == MEETING_DATE
     assert not audio.exists()

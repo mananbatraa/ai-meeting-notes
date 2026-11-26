@@ -36,7 +36,11 @@ def test_upload_audio_is_processed(client: TestClient, settings: Settings, extra
     assert m["status"] == "completed"
     assert m["title"] == "Launch sync"
     assert m["meeting_date"] == "2026-11-25"
-    assert m["notes"]["action_items"][0] == {
+    first = m["notes"]["action_items"][0]
+    assert len(first.pop("id")) == 12
+    assert first == {
+        "done": False,
+        "edited": False,
         "task": "Finish the payments SDK upgrade",
         "owner": "Sam",
         "due_date": "2026-11-27",

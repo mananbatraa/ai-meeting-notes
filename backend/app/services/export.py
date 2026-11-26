@@ -32,10 +32,17 @@ def to_markdown(meeting: MeetingDetail) -> str:
                 line += f"  \n  {d.context}"
             out.append(line)
     if n.action_items:
-        out += ["", "## Action items", "", "| Task | Owner | Due | Priority |", "|---|---|---|---|"]
+        out += [
+            "",
+            "## Action items",
+            "",
+            "| Done | Task | Owner | Due | Priority |",
+            "|---|---|---|---|---|",
+        ]
         for a in n.action_items:
             out.append(
-                f"| {_escape_cell(a.task)} | {_escape_cell(a.owner or 'Unassigned')} | "
+                f"| {'x' if a.done else ' '} | {_escape_cell(a.task)} | "
+                f"{_escape_cell(a.owner or 'Unassigned')} | "
                 f"{a.due_date.isoformat() if a.due_date else '-'} | {a.priority.value} |"
             )
     if n.open_questions:

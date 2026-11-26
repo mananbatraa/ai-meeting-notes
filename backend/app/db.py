@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import datetime as dt
+import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import JSON, Date, DateTime, Engine, String, Text, create_engine, event, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from .schemas import JobStatus, MeetingDetail, MeetingNotes, MeetingSummary, Transcript
+from .schemas import JobStatus, MeetingDetail, MeetingNotes, MeetingSummary, StoredNotes, Transcript
 
 
 def _utcnow() -> dt.datetime:
@@ -60,7 +61,7 @@ class Meeting(Base):
         return MeetingDetail(
             **self.to_summary().model_dump(),
             transcript=Transcript.model_validate(self.transcript) if self.transcript else None,
-            notes=MeetingNotes.model_validate(self.notes) if self.notes else None,
+            notes=StoredNotes.model_validate(self.notes) if self.notes else None,
         )
 
 
@@ -97,9 +98,14 @@ def _sqlite_pragmas(dbapi_conn, _record) -> None:  # type: ignore[no-untyped-def
     cur.close()
 
 
+class NotesNotReadyError(LookupError):
+    """The meeting exists but has no notes to edit yet."""
+
+
 class MeetingRepository:
     def __init__(self, db: Database) -> None:
         self.db = db
+        self._write_lock = threading.Lock()
 
     def create(
         self,
@@ -170,10 +176,29 @@ class MeetingRepository:
             m = s.get(Meeting, meeting_id)
             if m is None:
                 raise KeyError(meeting_id)
-            m.notes = notes.model_dump(mode="json")
+            m.notes = StoredNotes.from_extracted(notes).model_dump(mode="json")
             m.title = m.title or notes.title
             m.status = JobStatus.completed.value
             m.error = None
+
+    def update_notes[T](self, meeting_id: str, mutate: Callable[[StoredNotes], T]) -> T:
+        """Read-modify-write the stored notes atomically and return ``mutate``'s result.
+
+        ``mutate`` changes the notes in place. Raises ``KeyError`` if the meeting is gone
+        and ``NotesNotReadyError`` if it has no notes yet. Writes go through a process-wide
+        lock so two edits to the same meeting cannot overwrite each other.
+        """
+        with self._write_lock, self.db.session() as s:
+            m = s.get(Meeting, meeting_id)
+            if m is None:
+                raise KeyError(meeting_id)
+            if m.notes is None:
+                raise NotesNotReadyError(meeting_id)
+            notes = StoredNotes.model_validate(m.notes)
+            result = mutate(notes)
+            # Re-validate so a mutation can never persist something the API would reject.
+            m.notes = StoredNotes.model_validate(notes.model_dump()).model_dump(mode="json")
+            return result
 
     def clear_audio_path(self, meeting_id: str) -> None:
         with self.db.session() as s:

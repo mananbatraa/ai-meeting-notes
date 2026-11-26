@@ -4,13 +4,25 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import PlainTextResponse
 
-from ..schemas import JobStatus, MeetingDetail, MeetingList, MeetingSummary, TranscriptIn
+from ..db import NotesNotReadyError
+from ..schemas import (
+    ActionItemCreate,
+    ActionItemPatch,
+    JobStatus,
+    MeetingDetail,
+    MeetingList,
+    MeetingSummary,
+    StoredNotes,
+    TrackedActionItem,
+    TranscriptIn,
+)
 from ..services.export import to_markdown
 from ..services.pipeline import IN_FLIGHT
 from ..services.transcript_parser import parse_transcript
@@ -169,6 +181,68 @@ def delete_meeting(c: Container, meeting_id: str) -> None:
     c.repo.delete(meeting_id)
     if audio:
         Path(audio).unlink(missing_ok=True)
+
+
+def _edit_notes[T](c: AppContainer, meeting_id: str, mutate: Callable[[StoredNotes], T]) -> T:
+    try:
+        return c.repo.update_notes(meeting_id, mutate)
+    except KeyError as e:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "meeting not found") from e
+    except NotesNotReadyError as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, "notes are not ready yet") from e
+
+
+def _find(notes: StoredNotes, item_id: str) -> int:
+    for i, item in enumerate(notes.action_items):
+        if item.id == item_id:
+            return i
+    raise HTTPException(status.HTTP_404_NOT_FOUND, "action item not found")
+
+
+@router.post(
+    "/meetings/{meeting_id}/action-items",
+    status_code=status.HTTP_201_CREATED,
+    response_model=TrackedActionItem,
+)
+def add_action_item(c: Container, meeting_id: str, body: ActionItemCreate) -> TrackedActionItem:
+    """Add an action item the extraction missed."""
+
+    def add(notes: StoredNotes) -> TrackedActionItem:
+        item = TrackedActionItem(**body.model_dump(), edited=True)
+        notes.action_items.append(item)
+        return item
+
+    return _edit_notes(c, meeting_id, add)
+
+
+@router.patch("/meetings/{meeting_id}/action-items/{item_id}", response_model=TrackedActionItem)
+def update_action_item(
+    c: Container, meeting_id: str, item_id: str, body: ActionItemPatch
+) -> TrackedActionItem:
+    """Check an item off, or correct what the extraction got wrong (owner, due date, ...)."""
+    changes = body.model_dump(exclude_unset=True)
+    if isinstance(changes.get("owner"), str):
+        changes["owner"] = changes["owner"].strip() or None
+
+    def patch(notes: StoredNotes) -> TrackedActionItem:
+        i = _find(notes, item_id)
+        current = notes.action_items[i]
+        content_changed = any(k != "done" and getattr(current, k) != v for k, v in changes.items())
+        updated = TrackedActionItem.model_validate(
+            {**current.model_dump(), **changes, "edited": current.edited or content_changed}
+        )
+        notes.action_items[i] = updated
+        return updated
+
+    return _edit_notes(c, meeting_id, patch)
+
+
+@router.delete("/meetings/{meeting_id}/action-items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_action_item(c: Container, meeting_id: str, item_id: str) -> None:
+    def remove(notes: StoredNotes) -> None:
+        del notes.action_items[_find(notes, item_id)]
+
+    _edit_notes(c, meeting_id, remove)
 
 
 @router.get("/config")

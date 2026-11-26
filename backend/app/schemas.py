@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import uuid
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Priority(StrEnum):
@@ -64,6 +66,81 @@ class MeetingNotes(BaseModel):
     )
 
 
+def new_item_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+class TrackedActionItem(ActionItem):
+    """An action item as stored and served: extracted fields plus what people did with it.
+
+    Kept separate from ``ActionItem`` so the schema sent to Claude has no ``id`` or
+    ``done`` fields for the model to fill in.
+    """
+
+    id: str = Field(default_factory=new_item_id, min_length=1, max_length=64)
+    done: bool = False
+    edited: bool = Field(default=False, description="Changed by a person after extraction.")
+
+
+class StoredNotes(MeetingNotes):
+    """Notes as persisted and returned by the API, with trackable action items."""
+
+    action_items: list[TrackedActionItem] = Field(default_factory=list)  # type: ignore[assignment]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _stable_ids_for_legacy_rows(cls, data: Any) -> Any:
+        # Rows saved before items had ids get positional ones, so they stay stable
+        # across reads instead of a fresh random id on every load.
+        if isinstance(data, dict) and isinstance(data.get("action_items"), list):
+            items = []
+            for i, item in enumerate(data["action_items"]):
+                if isinstance(item, dict) and not item.get("id"):
+                    item = {**item, "id": f"item-{i}"}
+                items.append(item)
+            data = {**data, "action_items": items}
+        return data
+
+    @classmethod
+    def from_extracted(cls, notes: MeetingNotes) -> StoredNotes:
+        return cls.model_validate(
+            {
+                **notes.model_dump(),
+                "action_items": [{**a.model_dump(), "id": new_item_id()} for a in notes.action_items],
+            }
+        )
+
+
+class ActionItemCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task: str = Field(min_length=1, max_length=500)
+    owner: str | None = Field(default=None, max_length=100)
+    due_date: dt.date | None = None
+    priority: Priority = Priority.medium
+
+
+class ActionItemPatch(BaseModel):
+    """Partial update. Send only the fields to change; ``owner``/``due_date`` may be null to clear."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task: str | None = Field(default=None, min_length=1, max_length=500)
+    owner: str | None = Field(default=None, max_length=100)
+    due_date: dt.date | None = None
+    priority: Priority | None = None
+    done: bool | None = None
+
+    @model_validator(mode="after")
+    def _non_nullable_fields(self) -> ActionItemPatch:
+        for name in ("task", "priority", "done"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null")
+        if not self.model_fields_set:
+            raise ValueError("nothing to update")
+        return self
+
+
 class Segment(BaseModel):
     start: float = Field(ge=0)
     end: float = Field(ge=0)
@@ -104,7 +181,7 @@ class MeetingSummary(BaseModel):
 
 class MeetingDetail(MeetingSummary):
     transcript: Transcript | None = None
-    notes: MeetingNotes | None = None
+    notes: StoredNotes | None = None
 
 
 class MeetingList(BaseModel):
