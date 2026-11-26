@@ -36,7 +36,12 @@ class Settings(BaseSettings):
 
     # Processing
     worker_concurrency: int = Field(default=2, ge=1, le=16)
-    max_transcript_chars: int = Field(default=600_000, ge=1000)
+    # Hard cap: longer transcripts are refused rather than truncated.
+    max_transcript_chars: int = Field(default=2_000_000, ge=1000)
+    # Transcripts longer than this are split into parts and merged (map-reduce).
+    chunk_chars: int = Field(default=200_000, ge=2000)
+    chunk_overlap_segments: int = Field(default=3, ge=0, le=50)
+    chunk_concurrency: int = Field(default=4, ge=1, le=16)
 
     # HTTP
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:8080"]

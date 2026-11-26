@@ -95,10 +95,12 @@ def format_timestamp(seconds: float) -> str:
     return f"{h:d}:{m:02d}:{sec:02d}" if h else f"{m:d}:{sec:02d}"
 
 
+def render_segment(seg: Segment) -> str:
+    """``[m:ss] Speaker: text`` for one segment."""
+    who = f"{seg.speaker}: " if seg.speaker else ""
+    return f"[{format_timestamp(seg.start)}] {who}{seg.text.strip()}"
+
+
 def render_for_llm(transcript: Transcript) -> str:
     """One line per segment: ``[m:ss] Speaker: text``. Timestamps let the model cite moments."""
-    out = []
-    for seg in transcript.segments:
-        who = f"{seg.speaker}: " if seg.speaker else ""
-        out.append(f"[{format_timestamp(seg.start)}] {who}{seg.text.strip()}")
-    return "\n".join(out)
+    return "\n".join(render_segment(seg) for seg in transcript.segments)

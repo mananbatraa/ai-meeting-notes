@@ -12,12 +12,14 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 import anthropic
 
 from ..schemas import ActionItem, Decision, MeetingNotes, Priority, Transcript
+from .chunking import Chunk, chunk_transcript
 from .transcript_parser import render_for_llm
 from .transcription import DEMO_TRANSCRIPT
 
@@ -66,14 +68,58 @@ class NotesExtractor(Protocol):
     def extract(self, transcript: Transcript, *, meeting_date: dt.date) -> MeetingNotes: ...
 
 
-def build_user_message(transcript: Transcript, meeting_date: dt.date) -> str:
+def build_user_message(transcript: Transcript, meeting_date: dt.date, *, part: str | None = None) -> str:
+    header = f"Meeting date: {meeting_date.isoformat()} ({meeting_date.strftime('%A')})\n"
+    if part:
+        header += f"This is {part} of the meeting.\n"
+    return f"{header}\n<transcript>\n{render_for_llm(transcript)}\n</transcript>"
+
+
+CHUNK_PROMPT = """
+
+This transcript is long, so you are seeing one part of it at a time. The user message \
+says which part this is and the time range it covers. Write notes for this part only: \
+the summary covers what happened in this part, and every decision, action item and \
+open question must come from this part. Timestamps are still seconds from the start \
+of the whole meeting. Another step will merge the parts, so do not guess about what \
+happened before or after this part."""
+
+MERGE_PROMPT = """\
+You merge partial meeting notes into one set of notes for the whole meeting. A long \
+transcript was split into consecutive, slightly overlapping parts, and each part was \
+summarised on its own. You get those partial notes in order, as JSON.
+
+- title: one title for the whole meeting.
+- summary: 3-6 sentences on the whole meeting and where it landed, not a list of parts.
+- key_points: the main threads of the whole meeting; combine points that repeat.
+- decisions: keep every decision. If a later part reverses or changes an earlier \
+decision, keep only the final version and say in context what changed.
+- action_items: keep every distinct action item. Parts overlap at their edges, so the \
+same item can appear twice: merge duplicates into one, keeping the most specific \
+owner, due date and the earliest timestamp_s. If a later part reassigns an item or \
+moves its deadline, use the later owner or date.
+- open_questions: drop any question that a later part answered or turned into a \
+decision; keep the rest.
+- participants: everyone named in any part, without duplicates.
+
+Use only what the partial notes contain. Do not invent names, dates or commitments, \
+and keep timestamps exactly as given."""
+
+
+def build_merge_message(partials: list[tuple[Chunk, MeetingNotes]], meeting_date: dt.date) -> str:
+    parts = "\n\n".join(
+        f'<part index="{c.index + 1}" range="{c.label}">\n{notes.model_dump_json()}\n</part>'
+        for c, notes in partials
+    )
     return (
-        f"Meeting date: {meeting_date.isoformat()} ({meeting_date.strftime('%A')})\n\n"
-        f"<transcript>\n{render_for_llm(transcript)}\n</transcript>"
+        f"Meeting date: {meeting_date.isoformat()} ({meeting_date.strftime('%A')})\n"
+        f"The meeting was split into {len(partials)} parts.\n\n{parts}"
     )
 
 
 class ClaudeExtractor:
+    """Single call for ordinary meetings; map-reduce over chunks for long ones."""
+
     def __init__(
         self,
         client: Any,
@@ -81,13 +127,19 @@ class ClaudeExtractor:
         model: str = "claude-opus-5-5",
         effort: str = "medium",
         max_tokens: int = 16000,
-        max_transcript_chars: int = 600_000,
+        max_transcript_chars: int = 2_000_000,
+        chunk_chars: int = 200_000,
+        chunk_overlap_segments: int = 3,
+        chunk_concurrency: int = 4,
     ) -> None:
         self.client = client
         self.model = model
         self.effort = effort
         self.max_tokens = max_tokens
         self.max_transcript_chars = max_transcript_chars
+        self.chunk_chars = chunk_chars
+        self.chunk_overlap_segments = chunk_overlap_segments
+        self.chunk_concurrency = max(1, chunk_concurrency)
 
     def extract(self, transcript: Transcript, *, meeting_date: dt.date) -> MeetingNotes:
         user_message = build_user_message(transcript, meeting_date)
@@ -97,11 +149,40 @@ class ClaudeExtractor:
             raise ExtractionError(
                 f"transcript is too long ({len(user_message):,} chars, limit {self.max_transcript_chars:,})"
             )
+        if len(user_message) <= self.chunk_chars:
+            notes = self._call(SYSTEM_PROMPT, user_message)
+        else:
+            notes = self._extract_chunked(transcript, meeting_date)
+        return ground_notes(notes, transcript, meeting_date).notes
+
+    def _extract_chunked(self, transcript: Transcript, meeting_date: dt.date) -> MeetingNotes:
+        # Leave room in each window for the date header and the part label.
+        budget = max(1000, self.chunk_chars - 500)
+        chunks = chunk_transcript(transcript, max_chars=budget, overlap_segments=self.chunk_overlap_segments)
+        log.info("long transcript: extracting %d parts, then merging", len(chunks))
+
+        def map_one(chunk: Chunk) -> MeetingNotes:
+            msg = build_user_message(chunk.transcript, meeting_date, part=chunk.label)
+            partial = self._call(SYSTEM_PROMPT + CHUNK_PROMPT, msg)
+            # Ground each part against its own window so a hallucinated owner cannot
+            # be "confirmed" by the merge step.
+            return ground_notes(partial, chunk.transcript, meeting_date).notes
+
+        # Parts are independent, so run them concurrently; map() keeps their order.
+        # The first failure propagates and the meeting can be retried as a whole.
+        with ThreadPoolExecutor(max_workers=min(self.chunk_concurrency, len(chunks))) as pool:
+            partials = list(pool.map(map_one, chunks))
+
+        return self._call(
+            MERGE_PROMPT, build_merge_message(list(zip(chunks, partials, strict=True)), meeting_date)
+        )
+
+    def _call(self, system: str, user_message: str) -> MeetingNotes:
         try:
             response = self.client.beta.messages.parse(
                 model=self.model,
                 max_tokens=self.max_tokens,
-                system=SYSTEM_PROMPT,
+                system=system,
                 messages=[{"role": "user", "content": user_message}],
                 output_format=MeetingNotes,
                 output_config={"effort": self.effort},
@@ -134,7 +215,7 @@ class ClaudeExtractor:
             response.usage.input_tokens,
             response.usage.output_tokens,
         )
-        return ground_notes(MeetingNotes.model_validate(notes), transcript, meeting_date).notes
+        return MeetingNotes.model_validate(notes)
 
 
 @dataclass
@@ -287,4 +368,7 @@ def build_extractor(settings: Settings) -> NotesExtractor:
         effort=settings.claude_effort,
         max_tokens=settings.claude_max_tokens,
         max_transcript_chars=settings.max_transcript_chars,
+        chunk_chars=settings.chunk_chars,
+        chunk_overlap_segments=settings.chunk_overlap_segments,
+        chunk_concurrency=settings.chunk_concurrency,
     )

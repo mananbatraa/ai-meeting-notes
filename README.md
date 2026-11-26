@@ -56,7 +56,8 @@ stateDiagram-v2
 | `backend/app/api/routes.py` | Upload (streamed to disk with a size cap), paste, list, detail, retry, delete, Markdown export |
 | `backend/app/services/transcription.py` | `Transcriber` protocol; faster-whisper implementation, loaded lazily and shared across threads |
 | `backend/app/services/transcript_parser.py` | WebVTT / SRT / `Speaker: text` parsing, and the `[m:ss] Speaker: text` rendering sent to Claude |
-| `backend/app/services/extraction.py` | Prompt, Claude call, error mapping, grounding check, offline demo extractor |
+| `backend/app/services/extraction.py` | Prompts, Claude call, map-reduce for long meetings, error mapping, grounding check, offline demo extractor |
+| `backend/app/services/chunking.py` | Splits long transcripts into overlapping, segment-aligned windows |
 | `backend/app/services/pipeline.py` | Per-meeting state machine and the bounded worker pool |
 | `backend/app/schemas.py` | `MeetingNotes` and friends: the API contract *and* the JSON schema sent to Claude |
 | `frontend/src` | Upload panel, polling hook, notes view, action-item table, transcript view |
@@ -115,6 +116,9 @@ All settings are environment variables (see [`backend/.env.example`](backend/.en
 | `AMN_WHISPER_MODEL` | `base` | Any faster-whisper model name |
 | `AMN_WHISPER_DEVICE` / `AMN_WHISPER_COMPUTE_TYPE` | `auto` / `int8` | `cuda` + `float16` on a GPU |
 | `AMN_MAX_UPLOAD_MB` | `200` | |
+| `AMN_CHUNK_CHARS` | `200000` | Longer transcripts are summarised in parts and merged |
+| `AMN_CHUNK_OVERLAP_SEGMENTS` / `AMN_CHUNK_CONCURRENCY` | `3` / `4` | Overlap between parts; parts sent in parallel |
+| `AMN_MAX_TRANSCRIPT_CHARS` | `2000000` | Hard cap; longer transcripts are refused, never truncated |
 | `AMN_WORKER_CONCURRENCY` | `2` | Meetings processed in parallel |
 | `AMN_DELETE_AUDIO_AFTER_PROCESSING` | `true` | Audio is kept only until notes succeed |
 | `AMN_EXTRACTOR` / `AMN_TRANSCRIBER` | `claude` / `whisper` | `fake` for offline demo mode |
@@ -136,8 +140,25 @@ All settings are environment variables (see [`backend/.env.example`](backend/.en
   The user sets the meeting date on upload; it defaults to today.
 - **Timestamps in the transcript.** The model sees `[m:ss] Speaker: text`, so it can cite
   where each decision happened; the UI uses that to jump to and highlight the line.
-- **Refuse instead of truncate.** A transcript over the size limit fails with a clear error
-  rather than silently dropping its end, which is usually where the action items are.
+- **Long meetings: map-reduce, never truncate.** A transcript over `AMN_CHUNK_CHARS`
+  (~50k tokens) is split on segment boundaries into windows that overlap by a few
+  lines, so an item assigned across a boundary is seen whole by one window. Each window
+  is summarised concurrently with the same schema, grounded against *its own* text (so a
+  part cannot invent an owner that the merge then "confirms"), and a second call merges
+  the parts: de-duplicating overlap, keeping only the final version of a reversed
+  decision, and dropping questions answered later. The merged notes are grounded again
+  against the whole meeting. Only past a hard cap (`AMN_MAX_TRANSCRIPT_CHARS`, ~40 hours
+  of speech) is a transcript refused, with a clear error instead of silently dropping
+  its end, which is usually where the action items are.
+
+```mermaid
+flowchart LR
+    T["Long transcript"] --> S["chunk_transcript()<br/>segment-aligned windows<br/>with overlap"]
+    S --> P1["part 1 -> notes"] & P2["part 2 -> notes"] & P3["part N -> notes"]
+    P1 & P2 & P3 --> G1["ground each part<br/>against its window"]
+    G1 --> M["merge call<br/>MERGE_PROMPT"]
+    M --> G2["ground against<br/>whole transcript"]
+```
 - **Failure handling.** API errors are mapped to user-facing messages and a `retryable`
   flag (rate limits, 5xx, network); the SDK also retries transient errors itself. Refusals
   and `max_tokens` cut-offs are surfaced, never parsed. Server-side refusal fallbacks are

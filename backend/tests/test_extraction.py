@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
+import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -8,13 +10,17 @@ import anthropic
 import httpx2
 import pytest
 
+from app.config import Settings
 from app.schemas import ActionItem, Decision, MeetingNotes, Segment, Transcript
 from app.services.extraction import (
+    CHUNK_PROMPT,
     FALLBACK_BETA,
+    MERGE_PROMPT,
     SYSTEM_PROMPT,
     ClaudeExtractor,
     ExtractionError,
     FakeExtractor,
+    build_extractor,
     build_user_message,
     ground_notes,
 )
@@ -213,3 +219,144 @@ def test_demo_notes_on_a_friday_are_due_the_same_day() -> None:
     notes = FakeExtractor().extract(DEMO_TRANSCRIPT, meeting_date=friday)
     assert notes.action_items[0].due_date == friday
     assert notes.action_items[2].due_date == dt.date(2026, 11, 30)
+
+
+# --- long meetings: map-reduce over chunks ---------------------------------------
+
+
+def long_transcript(n: int = 120) -> Transcript:
+    """A long meeting where Ana assigns Ben a task early and Cy a task late."""
+    segs = [
+        Segment(start=i * 20.0, end=i * 20.0 + 19, speaker="Ana", text=f"Point {i}. " * 8) for i in range(n)
+    ]
+    segs[2] = Segment(start=40, end=59, speaker="Ana", text="Ben, please draft the budget by Friday.")
+    segs[-3] = Segment(start=segs[-3].start, end=segs[-3].end, speaker="Cy", text="I will book the venue.")
+    return Transcript(language="en", duration_s=n * 20.0, segments=segs)
+
+
+class RoutingMessages:
+    """Answers part calls and the merge call differently; records every request."""
+
+    def __init__(self, *, fail_part: int | None = None) -> None:
+        self.requests: list[dict[str, Any]] = []
+        self.fail_part = fail_part
+        self._lock = threading.Lock()
+
+    def parse(self, **kwargs: Any) -> Any:
+        with self._lock:
+            self.requests.append(kwargs)
+        content: str = kwargs["messages"][0]["content"]
+        if kwargs["system"] == MERGE_PROMPT:
+            return _response(
+                MeetingNotes(
+                    title="Offsite planning",
+                    summary="Merged summary.",
+                    action_items=[
+                        ActionItem(task="Draft the budget", owner="Ben", due_date=dt.date(2026, 11, 27)),
+                        ActionItem(task="Book the venue", owner="Cy"),
+                        ActionItem(task="Order swag", owner="Ghost"),  # not in the meeting
+                    ],
+                    participants=["Ana", "Ben", "Cy", "Ghost"],
+                )
+            )
+        m = re.search(r"This is part (\d+) of (\d+)", content)
+        assert m, "part calls must say which part they are"
+        part = int(m.group(1))
+        if part == self.fail_part:
+            raise _status_error(anthropic.InternalServerError, 503)
+        items = []
+        if "draft the budget" in content:
+            items.append(ActionItem(task="Draft the budget", owner="Ben"))
+        if "book the venue" in content:
+            # "Ben" is not in this late part: grounding against the part clears it.
+            items.append(ActionItem(task="Book the venue", owner="Cy"))
+            items.append(ActionItem(task="Review the budget", owner="Ben"))
+        return _response(
+            MeetingNotes(title=f"Part {part}", summary=f"Part {part} summary.", action_items=items)
+        )
+
+
+def _parts(messages: RoutingMessages) -> list[dict[str, Any]]:
+    return [r for r in messages.requests if r["system"] != MERGE_PROMPT]
+
+
+def test_long_transcript_is_extracted_in_parts_then_merged() -> None:
+    messages = RoutingMessages()
+    client = SimpleNamespace(beta=SimpleNamespace(messages=messages))
+    transcript = long_transcript()
+    extractor = ClaudeExtractor(client, chunk_chars=3000, chunk_overlap_segments=2)
+
+    notes = extractor.extract(transcript, meeting_date=MEETING_DATE)
+
+    parts = _parts(messages)
+    merges = [r for r in messages.requests if r["system"] == MERGE_PROMPT]
+    assert len(parts) >= 3
+    assert len(merges) == 1
+    assert messages.requests[-1]["system"] == MERGE_PROMPT  # merge runs after every part
+    assert all(r["system"] == SYSTEM_PROMPT + CHUNK_PROMPT for r in parts)
+    assert all(r["output_format"] is MeetingNotes for r in messages.requests)
+    for r in parts:
+        content = r["messages"][0]["content"]
+        assert content.startswith("Meeting date: 2026-11-25 (Wednesday)")
+        assert len(content) <= 3000
+    numbers = sorted(int(re.search(r"part (\d+) of", r["messages"][0]["content"]).group(1)) for r in parts)  # type: ignore[union-attr]
+    assert numbers == list(range(1, len(parts) + 1))
+
+    merge_msg = merges[0]["messages"][0]["content"]
+    assert f"split into {len(parts)} parts" in merge_msg
+    assert merge_msg.index('<part index="1"') < merge_msg.index(f'<part index="{len(parts)}"')
+    assert "Draft the budget" in merge_msg
+    assert "Book the venue" in merge_msg
+    # The part-level hallucination ("Ben" owning the venue-part item) was cleared before merging.
+    assert '"task":"Review the budget","owner":null' in merge_msg
+
+    # Final notes are grounded against the whole transcript.
+    assert notes.title == "Offsite planning"
+    owners = {i.task: i.owner for i in notes.action_items}
+    assert owners == {"Draft the budget": "Ben", "Book the venue": "Cy", "Order swag": None}
+    assert notes.participants == ["Ana", "Ben", "Cy"]
+
+
+def test_transcript_under_chunk_size_makes_a_single_call() -> None:
+    client, messages = fake_client(_response(sample_notes()))
+    ClaudeExtractor(client, chunk_chars=200_000).extract(long_transcript(), meeting_date=MEETING_DATE)
+    assert messages.calls == 1
+    assert messages.kwargs is not None
+    assert messages.kwargs["system"] == SYSTEM_PROMPT
+    assert "This is part" not in messages.kwargs["messages"][0]["content"]
+
+
+def test_failed_part_fails_the_whole_extraction_and_skips_the_merge() -> None:
+    messages = RoutingMessages(fail_part=2)
+    client = SimpleNamespace(beta=SimpleNamespace(messages=messages))
+    with pytest.raises(ExtractionError, match="HTTP 503") as ei:
+        ClaudeExtractor(client, chunk_chars=3000, chunk_concurrency=1).extract(
+            long_transcript(), meeting_date=MEETING_DATE
+        )
+    assert ei.value.retryable is True
+    assert all(r["system"] != MERGE_PROMPT for r in messages.requests)
+
+
+def test_hard_limit_still_applies_before_chunking() -> None:
+    messages = RoutingMessages()
+    client = SimpleNamespace(beta=SimpleNamespace(messages=messages))
+    with pytest.raises(ExtractionError, match="too long"):
+        ClaudeExtractor(client, chunk_chars=3000, max_transcript_chars=5000).extract(
+            long_transcript(), meeting_date=MEETING_DATE
+        )
+    assert messages.requests == []
+
+
+def test_build_extractor_passes_chunk_settings() -> None:
+    s = Settings(
+        extractor="claude",
+        ANTHROPIC_API_KEY="sk-test",
+        chunk_chars=50_000,
+        chunk_overlap_segments=5,
+        chunk_concurrency=2,
+        max_transcript_chars=900_000,
+    )
+    ex = build_extractor(s)
+    assert isinstance(ex, ClaudeExtractor)
+    assert (ex.chunk_chars, ex.chunk_overlap_segments, ex.chunk_concurrency) == (50_000, 5, 2)
+    assert ex.max_transcript_chars == 900_000
