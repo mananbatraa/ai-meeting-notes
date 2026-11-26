@@ -201,10 +201,12 @@ flowchart LR
 | Backend `pytest` | 130 (+2 opt-in) | API end to end through the real queue and SQLite, pipeline failure paths, restart recovery, concurrency, Claude request shape and error mapping (mocked client), long-meeting chunking and map-reduce (part grounding, merge order, failure of one part), action item editing (validation, 404/409, lost-update race), grounding rules, transcript parsing, Markdown export, config |
 | Real Whisper (CI) | 2 | faster-whisper can decode audio with the pinned PyAV; `tiny.en` transcribes speech synthesised by `espeak-ng`. Run with `uv sync --extra whisper && AMN_RUN_WHISPER=1 uv run pytest -m whisper` |
 | Frontend `vitest` | 63 | API client, upload validation and submission, polling with fake timers, retry/delete, owner filter, transcript jump, routing, action item check-off (optimistic + rollback), edit/add/remove |
+| Playwright e2e | 3 | Real backend (demo mode, real queue and SQLite) behind the Vite dev server in Chromium: upload a recording, check off/edit/add/remove action items, reload to prove they persisted, Markdown download reflects the edits; paste and delete; deep links and the back button |
 
 ```bash
 cd backend && uv run pytest && uv run ruff check . && uv run mypy
 cd frontend && npm test && npm run lint && npm run typecheck
+cd frontend && npx playwright install chromium && npm run e2e   # starts both servers itself
 ```
 
 CI runs all of the above plus a `docker compose build` on every push.

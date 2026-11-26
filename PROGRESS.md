@@ -2,6 +2,23 @@
 
 Handoff notes between build sessions.
 
+## Status (2026-11-25, 10:40 PM final run) — slot finished
+
+**Done this run (final polish)**
+- Playwright end-to-end suite (`frontend/e2e/`, `npm run e2e`): starts the real backend in
+  demo mode (fresh temp SQLite + upload dir) and the Vite dev server, then drives Chromium
+  through upload -> notes -> check off / edit owner / add / remove action items -> reload
+  (proves persistence) -> Markdown download; paste-and-delete; deep link + back button.
+  Mutation-checked (dropping the check-off step makes it fail).
+- New `e2e` CI job (installs Chromium, uploads the HTML report on failure).
+- README test table and commands updated.
+
+**Tests (all passing)**
+- Backend: 131 passed, 1 skipped locally with the whisper extra installed (the espeak-ng
+  test runs in CI). ruff, ruff format, mypy --strict clean.
+- Frontend: 63 vitest passing; eslint and tsc clean.
+- Playwright: 3 passing.
+
 ## Status (2026-11-25, evening)
 
 First build done: working backend, frontend, tests, Docker and CI.
@@ -57,7 +74,6 @@ First build done: working backend, frontend, tests, Docker and CI.
 ## Next steps
 1. Speaker diarization (who said what) for raw audio; Whisper gives no speakers today,
    which weakens owner extraction for audio uploads.
-2. Playwright end-to-end test of upload -> notes -> check off in demo mode (wire into CI).
-3. Export action items to GitHub Issues / Linear.
-4. Show chunk progress ("part 3 of 8") while a long meeting is extracting.
-5. An eval set of real transcripts with expected action items to measure extraction quality.
+2. Export action items to GitHub Issues / Linear.
+3. Show chunk progress ("part 3 of 8") while a long meeting is extracting.
+4. An eval set of real transcripts with expected action items to measure extraction quality.
