@@ -3,8 +3,8 @@ import { useEffect, useState } from "react";
 import { useMeeting } from "../hooks/useMeeting";
 import { api } from "../lib/api";
 import { formatDate, formatTimestamp } from "../lib/format";
-import { TERMINAL_STATUSES } from "../lib/types";
-import { ActionItemsTable } from "./ActionItemsTable";
+import { TERMINAL_STATUSES, type ActionItem, type MeetingDetail } from "../lib/types";
+import { ActionItemsTable, type ActionItemHandlers } from "./ActionItemsTable";
 import { ProgressSteps, StatusBadge } from "./StatusBadge";
 import { segmentAt, TranscriptView } from "./TranscriptView";
 
@@ -24,7 +24,7 @@ function download(name: string, text: string) {
 }
 
 export function MeetingView({ id, onChanged, onDeleted }: Props) {
-  const { meeting, error, notFound, refresh } = useMeeting(id);
+  const { meeting, error, notFound, refresh, update } = useMeeting(id);
   const [seek, setSeek] = useState<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -58,6 +58,50 @@ export function MeetingView({ id, onChanged, onDeleted }: Props) {
   };
 
   const notes = meeting.notes;
+
+  const setItems = (fn: (items: ActionItem[]) => ActionItem[]) =>
+    update((m: MeetingDetail) => (m.notes ? { ...m, notes: { ...m.notes, action_items: fn(m.notes.action_items) } } : m));
+  const replaceItem = (saved: ActionItem) => setItems((items) => items.map((i) => (i.id === saved.id ? saved : i)));
+
+  /** Edits are rethrown after the error is shown so the table can keep its form open. */
+  const edit = async (fn: () => Promise<void>) => {
+    setActionError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+      throw e;
+    }
+  };
+
+  const itemHandlers: ActionItemHandlers = {
+    onUpdate: (itemId, patch) =>
+      edit(async () => {
+        const before = notes?.action_items.find((i) => i.id === itemId);
+        // Checking an item off is instant; roll back if the server says no.
+        if (patch.done !== undefined && Object.keys(patch).length === 1 && before) {
+          replaceItem({ ...before, done: patch.done });
+          try {
+            replaceItem(await api.updateActionItem(id, itemId, patch));
+          } catch (e) {
+            replaceItem(before);
+            throw e;
+          }
+          return;
+        }
+        replaceItem(await api.updateActionItem(id, itemId, patch));
+      }),
+    onAdd: (item) =>
+      edit(async () => {
+        const saved = await api.addActionItem(id, item);
+        setItems((items) => [...items, saved]);
+      }),
+    onDelete: (itemId) =>
+      edit(async () => {
+        await api.deleteActionItem(id, itemId);
+        setItems((items) => items.filter((i) => i.id !== itemId));
+      }),
+  };
   return (
     <article className="meeting">
       <header className="meeting-header">
@@ -163,6 +207,7 @@ export function MeetingView({ id, onChanged, onDeleted }: Props) {
               items={notes.action_items}
               meetingDate={meeting.meeting_date}
               onSeek={meeting.transcript ? jumpTo : undefined}
+              editing={itemHandlers}
             />
           </section>
 

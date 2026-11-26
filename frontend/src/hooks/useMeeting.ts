@@ -51,5 +51,10 @@ export function useMeeting(id: string) {
   /** Restart polling, e.g. after a retry puts the meeting back in the queue. */
   const refresh = useCallback(() => setGeneration((g) => g + 1), []);
 
-  return { ...state, refresh };
+  /** Apply a local change (e.g. an edited action item) without refetching. */
+  const update = useCallback((fn: (m: MeetingDetail) => MeetingDetail) => {
+    setState((s) => (s.meeting ? { ...s, meeting: fn(s.meeting) } : s));
+  }, []);
+
+  return { ...state, refresh, update };
 }

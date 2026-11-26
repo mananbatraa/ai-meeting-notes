@@ -10,11 +10,30 @@ export interface Decision {
 }
 
 export interface ActionItem {
+  id: string;
   task: string;
   owner: string | null;
   due_date: string | null; // YYYY-MM-DD
   priority: Priority;
   timestamp_s: number | null;
+  done: boolean;
+  edited: boolean; // changed by a person after extraction
+}
+
+/** Fields a person can set on an existing item. Omit a field to leave it unchanged. */
+export interface ActionItemPatch {
+  task?: string;
+  owner?: string | null;
+  due_date?: string | null;
+  priority?: Priority;
+  done?: boolean;
+}
+
+export interface ActionItemCreate {
+  task: string;
+  owner: string | null;
+  due_date: string | null;
+  priority: Priority;
 }
 
 export interface MeetingNotes {

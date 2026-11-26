@@ -72,4 +72,19 @@ describe("api client", () => {
     await expect(api.deleteMeeting("m")).resolves.toBeUndefined();
     await expect(api.markdown("m")).resolves.toBe("# Notes");
   });
+
+  it("adds, patches and deletes action items", async () => {
+    const { calls } = mockFetch({
+      "POST /api/meetings/m%2F1/action-items": () => ({ status: 201, body: { id: "n" } }),
+      "PATCH /api/meetings/m%2F1/action-items/a%201": () => ({ body: { id: "a 1", done: true } }),
+      "DELETE /api/meetings/m%2F1/action-items/a%201": () => ({ status: 204 }),
+    });
+    await api.addActionItem("m/1", { task: "x", owner: null, due_date: null, priority: "low" });
+    expect(await api.updateActionItem("m/1", "a 1", { done: true })).toEqual({ id: "a 1", done: true });
+    await api.deleteActionItem("m/1", "a 1");
+    expect(calls.map((c) => c.method)).toEqual(["POST", "PATCH", "DELETE"]);
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({ task: "x", owner: null, due_date: null, priority: "low" });
+    expect(JSON.parse(calls[1]!.init!.body as string)).toEqual({ done: true });
+    expect(new Headers(calls[1]!.init!.headers).get("content-type")).toBe("application/json");
+  });
 });

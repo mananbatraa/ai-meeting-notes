@@ -1,4 +1,12 @@
-import type { MeetingDetail, MeetingList, MeetingSummary, PublicConfig } from "./types";
+import type {
+  ActionItem,
+  ActionItemCreate,
+  ActionItemPatch,
+  MeetingDetail,
+  MeetingList,
+  MeetingSummary,
+  PublicConfig,
+} from "./types";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -87,6 +95,29 @@ export const api = {
 
   deleteMeeting: (id: string) =>
     request<void>(`/api/meetings/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  addActionItem: (meetingId: string, item: ActionItemCreate) =>
+    request<ActionItem>(`/api/meetings/${encodeURIComponent(meetingId)}/action-items`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(item),
+    }),
+
+  updateActionItem: (meetingId: string, itemId: string, patch: ActionItemPatch) =>
+    request<ActionItem>(
+      `/api/meetings/${encodeURIComponent(meetingId)}/action-items/${encodeURIComponent(itemId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      },
+    ),
+
+  deleteActionItem: (meetingId: string, itemId: string) =>
+    request<void>(
+      `/api/meetings/${encodeURIComponent(meetingId)}/action-items/${encodeURIComponent(itemId)}`,
+      { method: "DELETE" },
+    ),
 
   markdown: (id: string) => request<string>(`/api/meetings/${encodeURIComponent(id)}/markdown`),
 };

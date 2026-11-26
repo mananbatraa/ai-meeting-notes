@@ -1,4 +1,4 @@
-import type { MeetingDetail, MeetingNotes, PublicConfig, Transcript } from "../lib/types";
+import type { ActionItem, MeetingDetail, MeetingNotes, PublicConfig, Transcript } from "../lib/types";
 
 export const config: PublicConfig = {
   max_upload_mb: 1,
@@ -17,15 +17,27 @@ export const transcript: Transcript = {
   ],
 };
 
+export function item(overrides: Partial<ActionItem> & { id: string; task: string }): ActionItem {
+  return {
+    owner: null,
+    due_date: null,
+    priority: "medium",
+    timestamp_s: null,
+    done: false,
+    edited: false,
+    ...overrides,
+  };
+}
+
 export const notes: MeetingNotes = {
   title: "Launch sync",
   summary: "The team moved the launch to the 10th.",
   key_points: ["Android blocked on SDK"],
   decisions: [{ decision: "Launch on the 10th", context: "Need beta feedback", timestamp_s: 40 }],
   action_items: [
-    { task: "Write launch brief", owner: "Lee", due_date: null, priority: "low", timestamp_s: null },
-    { task: "Finish SDK upgrade", owner: "Sam", due_date: "2026-11-27", priority: "high", timestamp_s: 15 },
-    { task: "Set up crash alerts", owner: null, due_date: "2026-11-30", priority: "medium", timestamp_s: 50 },
+    item({ id: "a1", task: "Write launch brief", owner: "Lee", priority: "low" }),
+    item({ id: "a2", task: "Finish SDK upgrade", owner: "Sam", due_date: "2026-11-27", priority: "high", timestamp_s: 15 }),
+    item({ id: "a3", task: "Set up crash alerts", due_date: "2026-11-30", timestamp_s: 50 }),
   ],
   open_questions: ["Do we need the press kit?"],
   participants: ["Priya", "Sam", "Lee"],
